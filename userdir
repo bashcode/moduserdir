@@ -1,0 +1,97 @@
+#!/usr/bin/perl
+use strict;
+use File::Touch;
+use Sys::Hostname;
+
+my ( $user, $apply ) = @ARGV;
+my $httpdinclude = "/usr/local/apache/conf/userdata/std/";
+my $httpsinclude = "/usr/local/apache/conf/userdata/ssl/";
+my $userdatainclude = "/var/cpanel/userdata";
+
+# read cpanel version
+my $cpanel_ver_file = "/usr/local/cpanel/version";
+open (my $fh, '<', $cpanel_ver_file)
+  or die "Could Not open '$cpanel_ver_file' $!";
+my $cpanel_ver = sprintf "%.2f", <$fh>;
+
+checks();
+edit();
+apply();
+
+# check for user/problems
+sub checks {
+	if ( ! defined($user) ) {
+		die "Usage: userdir <user> [y|n to apply changes. Rebuilds apache config and restarts]\n";
+	}
+	if ( $apply !~ /(y|n)/ ) {
+		die "Usage: userdir <user> [y|n to apply changes. Rebuilds apache config and restarts]\n";
+	}
+	if ( $user eq 'root' ) {
+		die "[*] User defined as root.\n";
+	}
+	if ( $user =~ /[\!\@\#\$\%\^\&*\(\)\_\-\\]/ ){
+		die "[*] User contains special characters.\n";
+	}
+	if ( ! -f "/var/cpanel/users/$user" ) {
+		die "[*] $user does not exist.\n";
+	}
+	print "[*] User defined as $user.\n";
+}
+
+# make the changes
+sub edit {
+	# set include path depending on cpanel version, or apache version for newer cpanel 
+	my $apache_ver = '2';
+
+	print "[*] Disabling userdir for $user\n";
+	unless( -d "$httpdinclude/$apache_ver/$user" ) {
+		system("mkdir -p $httpdinclude/$apache_ver/$user")
+	}
+	unless( -e "$httpdinclude/$apache_ver/$user/userdir.conf" ) {
+		touch("$httpdinclude/$apache_ver/$user/userdir.conf");
+	}
+	open(my $DAT, '<', "$httpdinclude/$apache_ver/$user/userdir.conf");
+		my @conf = <$DAT>;
+	close($DAT);
+	if ( ! grep(/^Userdir\sdisabled$/, @conf) ) {
+		open(my $WAT, '>>', "$httpdinclude/$apache_ver/$user/userdir.conf");
+			print $WAT "Userdir disabled\n";
+		close($WAT);
+	}
+	unless( -d "$httpsinclude/$apache_ver/$user" ) {
+		system("mkdir -p $httpsinclude/$apache_ver/$user")
+	}
+	unless( -e "$httpsinclude/$apache_ver/$user/userdir.conf" ) {
+		touch("$httpsinclude/$apache_ver/$user/userdir.conf");
+	}
+	open($DAT, "<", "$httpsinclude/$apache_ver/$user/userdir.conf");
+		@conf = <$DAT>;
+	close($DAT);
+	if ( ! grep(/^Userdir\sdisabled$/,@conf) ) {
+		open(my $WAT, '>>', "$httpsinclude/$apache_ver/$user/userdir.conf");
+			print $WAT "Userdir disabled\n";
+		close($WAT);
+	}
+
+
+	system("sed -i 's/^userdirprotect: -1/userdirprotect: /g' $userdatainclude/$user/*");
+	print "[*] Applying vhost Includes.\n";
+	system("/scripts/ensure_vhost_includes --user=$user --no-restart >> /dev/null 2> /dev/null");
+}
+
+
+# apply changes if specified
+sub apply {
+	if ( $apply eq 'y' ) {
+		print "[*] Applying changes. Watch for errors this may have caused.\n";
+		print "============================================================================================\n";
+		print "\n";
+		system("/scripts/updateuserdomains");
+		system("/scripts/rebuildhttpdconf");
+		system("/etc/init.d/httpd graceful");
+		print "\n";
+		print "============================================================================================\n";
+	}
+}
+
+print "[*] Done.\n";
